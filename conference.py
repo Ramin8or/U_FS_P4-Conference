@@ -713,4 +713,55 @@ class ConferenceApi(remote.Service):
         )
 
 
+# - - - Wish lists - - - - - - - - - - - - - - - - - - - -
+
+    @endpoints.method(endpoints.ResourceContainer(
+                        message_types.VoidMessage,
+                        websafeSessionKey=messages.StringField(1),
+                        ),
+                        ProfileForm,
+                        path='addSessionToWishlist/{websafeSessionKey}',
+                        http_method='POST',
+                        name='addSessionToWishlist'
+    )
+    def addSessionToWishlist(self, request):
+        """Add a session to the user's wishlist"""
+        # get Session object from request; bail if not found
+        wssk = request.websafeSessionKey
+        session_key = ndb.Key(urlsafe=wssk)
+        session = session_key.get()
+        if not session:
+            raise endpoints.NotFoundException(
+                'Invalid key for session: %s' % wssk)
+        elif session_key.kind() != 'Session':
+            raise endpoints.BadRequestException(
+                'The websafeKey: %s does not belong to a session' % wssk) 
+
+        conference = session_key.parent().get()
+        profile = self._getProfileFromUser()
+
+        # Add session to the user's wishlist iff not already in wishlist
+        if wssk not in profile.sessionWishList:
+            profile.sessionWishList.append(wssk)
+            profile.put()
+
+        # return ProfileForm
+        return self._copyProfileToForm(profile)
+
+
+    @endpoints.method(message_types.VoidMessage, SessionForms,
+        path='getSessionsInWishlist',
+        http_method='GET',
+        name='getSessionsInWishlist'
+    )
+    def getSessionsInWishlist(self, request):
+        """Get sessions in user's wishlist"""
+        profile = self._getProfileFromUser()
+        keys = [ndb.Key(urlsafe=wssk) for wssk in profile.sessionWishList]  
+        q = ndb.get_multi(keys)
+        return SessionForms(
+            items=[self._copySessionToForm(s) for s in q]
+        )
+
+
 api = endpoints.api_server([ConferenceApi]) # register API
