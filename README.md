@@ -40,15 +40,29 @@ Most of the code written for this project is concentrated in the following files
 The following tasks were completed based on the [specifications][9]:
 
 ### Support for Conference Sessions
-The data model and form class for session support is provided in **models.py**. Session has an ancestor which is the Conference where the session is held. The method *_createSessionObject()* in **conference.py** does the work to instanciate session entities and form objects. This is where the unique key for session entities are assigned based on the unique conference key which is the ancestor of the session. The session name is the only required property, other properties are assigned default values as part of handling the client request for creating a new session. For this project the Session Speaker is implemented as a simple string property, and the Session Type is an enum property. In addition to the typical properties for the session, a "Popularity" integer property was also included to support another task in this project. The popularity is incremented as users add sessions to their wish list. The following Endpoints methods were implemented in **conference.py** to privide Session functionality for the Conference App:
+The data model and form class for session support is provided in **models.py**. Session has an ancestor which is the Conference where the session is held. The method *_createSessionObject()* in **conference.py** does the work to instanciate session entities and form objects. This is where the unique key for session entities are assigned based on the unique conference key which is the ancestor of the session. The session name is the only required property, other properties are assigned default values as part of handling the client request for creating a new session. For this project the Session Speaker is implemented as a simple string property, and the Session Type is an enum property. In addition to the typical properties for the session, a "Popularity" integer property was also included to support another task in this project. The following Endpoints methods were implemented in **conference.py** to privide Session functionality for the Conference App:
 *  **getConferenceSessions(websafeConferenceKey)** -- Given a conference, return all sessions
 *  **getConferenceSessionsByType(websafeConferenceKey, typeOfSession)** Given a conference, return all sessions of a specified type (eg lecture, keynote, workshop)
 *  **getSessionsBySpeaker(speaker)** -- Given a speaker, return all sessions given by this particular speaker, across all conferences
 *  **createSession(SessionForm, websafeConferenceKey)** -- open only to the organizer of the conference
 
+### Add Sessions to User Wishlist
+The data support for Wishlist was simply provided by adding a repeated string property called *sessionWishList* to the *Profile* kind and the corresponding change to the ProfileForm class. **addSessionToWishlist()** is the Endpoint method that implements this functionality in **conference.py**. Any user can add any session to their wishlist even if they are not registered for the conferene. As users add a session to their wishlist, the popularity property for the session is incremented to track trends and other functionality in the future, described in the next section. 
 
+### Two additional queries
+I provided the following two additional queries for this project, both implemented in **conference.py**:
 
+1.  **getSessionsByDate()** Given a date, returns session for that date in order of starting time.
+2.  **getSessionsByPopularity()** Lists all sessions in the descending order of their popularity.   
+As mentioned earlier, session popularity is calculated as a simple increment when a session is added to a user's wishlist.
 
+### Query problems stemming from Datastore constraints
+Queries such as *"give me a list of sessions that start before 7 pm, and whose session type is not workshop"* cannot be implemented directly using Datastore queries. This is due to the contraint that Datastore has around only allowing a single inequality filter per query. To work around this constraint, one can simply write a query fetches all sessions filtered by start time less than 7 pm, and write code that goes through the list of filtered sessions to return only those sessions whose session type is not workshop.
+
+### Add a Task
+When a new session is added to a conference, the speaker for the new session is promoted using an annoucement, if the speaker also delivers other sessions in the given conference. This featured speaker functionality is kept in a memcached key, and available through an Endpoint method called **getFeaturedSpeaker()**. This functionality was implemented by creating a task queue when new sessions are created. The task key starts up in the background to determine if the newly created session's speaker should be promoted as a featured speaker, and carries on the necessary work. See **main.py** and **conference.py** for the implementation.
+
+###
 [1]: https://developers.google.com/appengine
 [2]: http://python.org
 [3]: https://developers.google.com/appengine/docs/python/endpoints/
