@@ -53,6 +53,11 @@ API_EXPLORER_CLIENT_ID = endpoints.API_EXPLORER_CLIENT_ID
 MEMCACHE_ANNOUNCEMENTS_KEY = "RECENT_ANNOUNCEMENTS"
 ANNOUNCEMENT_TPL = ('Last chance to attend! The following conferences '
                     'are nearly sold out: %s')
+SPEAKER_ANNOUCEMENT = (
+    'Featured Speaker, %s, will deliver new session, %s, in conference %s')
+
+MEMCACHE_FEATURED_KEY = 'FEATURED SPEAKERS'
+
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 DEFAULTS = {
@@ -666,6 +671,12 @@ class ConferenceApi(remote.Service):
         # put Session in data store
         Session(**data).put()
 
+        # add a new task to find feature speaker
+        taskqueue.add(
+            params={'session': str(session_key.urlsafe())},
+            url='/tasks/set_featuredSpeaker'
+        )
+
         # return SessionForm object
         return self._copySessionToForm(session_key.get())
 
@@ -815,5 +826,54 @@ class ConferenceApi(remote.Service):
         return SessionForms(
             items=[self._copySessionToForm(s) for s in q]
         )
+
+# - - - Featured speaker - - - - - - - - - - - - - - - - - - - -
+
+    @staticmethod
+    def _cacheFeaturedSpeaker(wssk):
+        """Cash Featured Speaker in memcache
+        used by SetFeaturedtSpeaker task, created in _createSessionObject."""
+
+        foundSpeaker = False
+        announcement = ""
+        new_session_key = ndb.Key(urlsafe=wssk)
+        new_session = new_session_key.get()
+        if not new_session:
+            raise endpoints.NotFoundException(
+                'Invalid session key: %s' % wssk)
+        new_session_speaker = new_session.speaker 
+        if not new_session_speaker:
+            return announcement
+
+        conf_key = new_session_key.parent()
+        conference = conf_key.get()
+        q = Session.query(ancestor=conf_key).fetch()
+
+        # check if this speaker is also hosting other sessions in this conference
+        for session in q:
+            if session.name != new_session.name:
+                if session.speaker == new_session_speaker:
+                    foundSpeaker = True
+                    break
+
+        if foundSpeaker:
+            announcement = SPEAKER_ANNOUCEMENT % (
+                new_session_speaker, new_session.name, conference.name)
+            memcache.set(MEMCACHE_FEATURED_KEY, announcement)
+
+        return announcement
+
+
+    @endpoints.method(message_types.VoidMessage, StringMessage,
+                      path='conference/getFeaturedSpeaker',
+                      http_method='GET', 
+                      name='getFeaturedSpeaker')
+    def getFeaturedSpeaker(self, request):
+        """Get featured speaker."""
+        featured = memcache.get(MEMCACHE_FEATURED_KEY)
+        if not featured:
+            featured = 'No featured speakers at the moment!'
+        return StringMessage(data=featured)
+
 
 api = endpoints.api_server([ConferenceApi]) # register API
