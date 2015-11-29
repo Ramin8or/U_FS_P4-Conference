@@ -94,3 +94,14 @@ indexes:
   properties:
   - name: topics
   - name: name
+
+- kind: Session
+  ancestor: yes
+  properties:
+  - name: name
+
+- kind: Session
+  ancestor: yes
+  properties:
+  - name: sessionType
+  - name: name

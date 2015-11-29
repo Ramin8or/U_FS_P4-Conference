@@ -36,6 +36,10 @@ from models import ConferenceForms
 from models import ConferenceQueryForm
 from models import ConferenceQueryForms
 from models import TeeShirtSize
+from models import Session
+from models import SessionForm
+from models import SessionForms
+from models import SessionType
 
 from settings import WEB_CLIENT_ID
 from settings import ANDROID_CLIENT_ID
@@ -84,6 +88,22 @@ CONF_POST_REQUEST = endpoints.ResourceContainer(
     websafeConferenceKey=messages.StringField(1),
 )
 
+SESS_POST_REQUEST = endpoints.ResourceContainer(
+    SessionForm,
+    websafeConferenceKey=messages.StringField(1),
+)
+
+SESS_BY_SPEAKER_POST_REQUEST = endpoints.ResourceContainer(
+    message_types.VoidMessage,
+    speaker=messages.StringField(1),
+)
+
+SESS_BY_TYPE_GET_REQUEST = endpoints.ResourceContainer(
+    message_types.VoidMessage,
+    websafeConferenceKey=messages.StringField(1),
+    SessionType=messages.StringField(2),
+)
+
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 
@@ -91,7 +111,7 @@ CONF_POST_REQUEST = endpoints.ResourceContainer(
     allowed_client_ids=[WEB_CLIENT_ID, API_EXPLORER_CLIENT_ID, ANDROID_CLIENT_ID, IOS_CLIENT_ID],
     scopes=[EMAIL_SCOPE])
 class ConferenceApi(remote.Service):
-    """Conference API v0.1"""
+    """Conference API v1.0"""
 
 # - - - Conference objects - - - - - - - - - - - - - - - - -
 
@@ -548,6 +568,148 @@ class ConferenceApi(remote.Service):
 
         return ConferenceForms(
             items=[self._copyConferenceToForm(conf, "") for conf in q]
+        )
+
+# - - - Sessions - - - - - - - - - - - - - - - - - - - -
+
+    def _copySessionToForm(self, session):
+        """Copy relevant fields from Session to SessionForm."""
+        sf = SessionForm()
+        for field in sf.all_fields():
+            if hasattr(session, field.name):
+                # convert Date to date string
+                if field.name == 'date':
+                    setattr(sf, field.name, str(getattr(session, field.name)))
+                # convert sessionType string to Enum
+                elif field.name == 'sessionType':
+                    setattr(
+                        sf, 
+                        field.name,
+                        getattr(SessionType, getattr(session, field.name))
+                    )             
+                # just copy others
+                else:
+                    setattr(sf, field.name, getattr(session, field.name))
+            # get the websafe session key
+            elif field.name == 'websafeKey':
+                setattr(sf, field.name, session.key.urlsafe())
+        sf.check_initialized()
+        return sf
+
+
+    def _createSessionObject(self, request):
+        """Create Session object for a conference, given the conference key."""
+        # is the user signed in?
+        user = endpoints.get_current_user()
+        if not user:
+            raise endpoints.UnauthorizedException('Authorization required')
+        user_id = getUserId(user)
+
+        # get Conference object from passed in websafeConferenceKey
+        conf_key = ndb.Key(urlsafe=request.websafeConferenceKey)
+        conference = conf_key.get()
+
+        # validate conference, user, and session name
+        if not conference:
+            raise endpoints.NotFoundException(
+                'Invalid conference key: %s' % request.websafeConferenceKey) 
+        if user_id != conference.organizerUserId:
+            raise endpoints.BadRequestException(
+                'User must be the conference organizer to add a new session.')
+        if not request.name:
+            raise endpoints.BadRequestException(
+                'Session name is required.')
+
+        # copy SessionForm message into a dictionary and process it
+        data = {field.name: getattr(request, field.name)
+                for field in request.all_fields()}
+        del data['websafeConferenceKey']
+        del data['websafeKey']
+        
+        # convert dates from strings to Date objects
+        if data['date']:
+            data['date'] = datetime.strptime(data['date'][:10], "%Y-%m-%d").date()
+
+        # use sessionType enum field's name string value
+        if data['sessionType']:
+            data['sessionType'] = data['sessionType'].name
+
+        # create new id and key for session with conf_key as parent
+        session_id = Session.allocate_ids(size=1, parent=conf_key)[0]
+        session_key = ndb.Key(Session, session_id, parent=conf_key)
+        data['key'] = session_key
+
+        # put Session in data store
+        Session(**data).put()
+
+        # return SessionForm object
+        return self._copySessionToForm(session_key.get())
+
+
+    @endpoints.method(SESS_POST_REQUEST, SessionForm, 
+            path='createSession/{websafeConferenceKey}',
+            http_method='POST', 
+            name='createSession')
+    def createSession(self, request):
+        """Create new session for a conference, given the conference key."""
+        return self._createSessionObject(request)
+
+
+    @endpoints.method(CONF_GET_REQUEST, SessionForms,
+            path='getConferenceSessions/{websafeConferenceKey}',
+            http_method='GET', 
+            name='getConferenceSessions')
+    def getConferenceSessions(self, request):
+        """Return all the sessions for given conference."""
+        # get Conference object from request; bail if not found
+        wsck = request.websafeConferenceKey
+        conf_key = ndb.Key(urlsafe=wsck)
+        conference = conf_key.get()
+        if not conference:
+            raise endpoints.NotFoundException(
+                'Invalid key passed for conference: %s' % wsck)
+
+        # query sessions and return them as a set of SessionForms
+        q = Session.query(ancestor=conf_key).order(Session.name).fetch()
+        return SessionForms(
+            items=[self._copySessionToForm(session) for session in q]
+        )
+
+
+    @endpoints.method(SESS_BY_SPEAKER_POST_REQUEST, SessionForms,
+            path='session_by_speaker/{speaker}',
+            http_method='POST', 
+            name='getSessionsBySpeaker')
+    def getSessionsBySpeaker(self, request):
+        """Return sessions by speaker."""
+        sessions = Session.query(Session.speaker == request.speaker)
+        return SessionForms(
+            items=[self._copySessionToForm(s) for s in sessions]
+        )
+
+
+    @endpoints.method(SESS_BY_TYPE_GET_REQUEST, SessionForms,
+                      path='getConferenceSessionsByType/{websafeConferenceKey}/{SessionType}', 
+                      http_method='GET', 
+                      name='getConferenceSessionsByType')
+    def getConferenceSessionsByType(self, request):
+        """Return conference sessions by type."""
+        # get Conference object from request; bail if not found
+        wsck = request.websafeConferenceKey
+        conf_key = ndb.Key(urlsafe=wsck)
+        conference = conf_key.get()
+        if not conference:
+            raise endpoints.NotFoundException(
+                'Invalid key for conference: %s' % wsck)
+
+        session_type = request.SessionType.upper()
+        q = Session.query(ancestor=conf_key).\
+            filter(Session.sessionType == session_type).\
+            order(Session.name).\
+            fetch()
+
+        return SessionForms(
+            items=[self._copySessionToForm(s) for s in q]
         )
 
 
