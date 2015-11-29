@@ -62,6 +62,14 @@ DEFAULTS = {
     "topics": [ "Default", "Topic" ],
 }
 
+SESSION_DEFAULTS = {
+    "duration": 60,
+    "speaker": "TBD",
+    "sessionType": "OTHER",
+    "location": "TBD",
+    "popularity": 0,
+}
+
 OPERATORS = {
             'EQ':   '=',
             'GT':   '>',
@@ -102,6 +110,16 @@ SESS_BY_TYPE_GET_REQUEST = endpoints.ResourceContainer(
     message_types.VoidMessage,
     websafeConferenceKey=messages.StringField(1),
     SessionType=messages.StringField(2),
+)
+
+WISHLIST_POST_REQUEST = endpoints.ResourceContainer(
+    message_types.VoidMessage,
+    websafeSessionKey=messages.StringField(1),
+)
+
+SESS_BYDATE_GET_REQUEST = endpoints.ResourceContainer(
+    message_types.VoidMessage,
+    date=messages.StringField(1),
 )
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -625,7 +643,13 @@ class ConferenceApi(remote.Service):
                 for field in request.all_fields()}
         del data['websafeConferenceKey']
         del data['websafeKey']
-        
+
+        # add default values for those missing (both data model & outbound Message)
+        for df in SESSION_DEFAULTS:
+            if data[df] in (None, []):
+                data[df] = SESSION_DEFAULTS[df]
+                setattr(request, df, SESSION_DEFAULTS[df])
+
         # convert dates from strings to Date objects
         if data['date']:
             data['date'] = datetime.strptime(data['date'][:10], "%Y-%m-%d").date()
@@ -715,15 +739,10 @@ class ConferenceApi(remote.Service):
 
 # - - - Wish lists - - - - - - - - - - - - - - - - - - - -
 
-    @endpoints.method(endpoints.ResourceContainer(
-                        message_types.VoidMessage,
-                        websafeSessionKey=messages.StringField(1),
-                        ),
-                        ProfileForm,
+    @endpoints.method(WISHLIST_POST_REQUEST, ProfileForm,
                         path='addSessionToWishlist/{websafeSessionKey}',
                         http_method='POST',
-                        name='addSessionToWishlist'
-    )
+                        name='addSessionToWishlist')
     def addSessionToWishlist(self, request):
         """Add a session to the user's wishlist"""
         # get Session object from request; bail if not found
@@ -736,6 +755,9 @@ class ConferenceApi(remote.Service):
         elif session_key.kind() != 'Session':
             raise endpoints.BadRequestException(
                 'The websafeKey: %s does not belong to a session' % wssk) 
+        # increment the session's populatiry and write it out
+        session.popularity = session.popularity + 1
+        session.put()
 
         conference = session_key.parent().get()
         profile = self._getProfileFromUser()
@@ -763,5 +785,35 @@ class ConferenceApi(remote.Service):
             items=[self._copySessionToForm(s) for s in q]
         )
 
+# - - - Additional queries - - - - - - - - - - - - - - - - - - - -
+
+    @endpoints.method(SESS_BYDATE_GET_REQUEST, SessionForms,
+        path='getSessionsByDate',
+        http_method='GET',
+        name='getSessionsByDate')
+    def getSessionsByDate(self, request):
+        """Get sessions by date."""
+        try:
+            date = datetime.strptime(request.date[:10], "%Y-%m-%d").date()
+        except ValueError:
+            raise endpoints.BadRequestException(
+                'Date must use this format: YYYY-MM-DD')
+
+        q = Session.query(Session.date == date).order(-Session.startTime)
+        return SessionForms(
+            items=[self._copySessionToForm(s) for s in q]
+        )
+
+
+    @endpoints.method(message_types.VoidMessage, SessionForms,
+        path='getSessionsByPopularity',
+        http_method='GET',
+        name='getSessionsByPopularity')
+    def getSessionsByPopularity(self, request):
+        """Get sessions by date."""
+        q = Session.query().order(-Session.popularity)
+        return SessionForms(
+            items=[self._copySessionToForm(s) for s in q]
+        )
 
 api = endpoints.api_server([ConferenceApi]) # register API
